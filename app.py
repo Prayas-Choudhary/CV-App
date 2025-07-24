@@ -6,12 +6,17 @@ import pandas as pd
 import pdfplumber
 from docx import Document
 import spacy
+import subprocess
 from sentence_transformers import SentenceTransformer, util
 from openpyxl import load_workbook
 from openpyxl.worksheet.datavalidation import DataValidation
 
 # Load NLP models
-nlp = spacy.load("en_core_web_sm")
+try:
+    nlp = spacy.load("en_core_web_sm")
+except OSError:
+    subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"])
+    nlp = spacy.load("en_core_web_sm")
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 st.set_page_config(page_title="CV Screening Assistant", layout="centered")
