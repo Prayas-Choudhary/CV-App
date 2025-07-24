@@ -125,3 +125,4 @@ elif not jd_text.strip():
 
 elif not uploaded_files:
     st.info("📂 Please upload at least one resume.")
+;;
