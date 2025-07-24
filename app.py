@@ -6,17 +6,12 @@ import pandas as pd
 import pdfplumber
 from docx import Document
 import spacy
-import subprocess
 from sentence_transformers import SentenceTransformer, util
 from openpyxl import load_workbook
 from openpyxl.worksheet.datavalidation import DataValidation
 
 # Load NLP models
-try:
-    nlp = spacy.load("en_core_web_sm")
-except OSError:
-    subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"])
-    nlp = spacy.load("en_core_web_sm")
+nlp = spacy.load("en_core_web_sm")
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 st.set_page_config(page_title="CV Screening Assistant", layout="centered")
@@ -57,16 +52,11 @@ def get_similarity(text, jd_embedding):
     cv_embedding = model.encode(text, convert_to_tensor=True)
     return round(util.cos_sim(cv_embedding, jd_embedding).item() * 100, 2)
 
-def extract_field(label, text):
-    pattern = rf"{label}[:\-\s]*([^\n\r]+)"
-    try:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match and match.lastindex >= 1:
-            return match.group(1).strip()
-    except Exception as e:
-        print(f"Error extracting {label}: {e}")
-    return ""
-    
+def extract_field(field_name, text):
+    pattern = rf"{field_name}[:\s]*([^\n\r]+)"
+    match = re.search(pattern, text, re.IGNORECASE)
+    return match.group(1).strip() if match else ""
+
 def generate_email(name, email, jd_filename):
     body = f"""\
 Subject: Job Opportunity
