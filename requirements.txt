@@ -1,6 +1,7 @@
-streamlit
+streamlit==1.47.0
 pandas
 openpyxl
 pdfplumber
 python-docx
-spacy
+spacy==3.8.7
+
