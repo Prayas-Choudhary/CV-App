@@ -1,182 +1,126 @@
 import os
 import re
-import streamlit as st
-import pandas as pd
-import pdfplumber
-from docx import Document
+import io
+import base64
 import spacy
+import torch
+import pdfplumber
+import pandas as pd
+import streamlit as st
+from io import BytesIO
+from docx import Document
+from openpyxl import Workbook
 from sentence_transformers import SentenceTransformer, util
-from openpyxl import load_workbook
-from openpyxl.worksheet.datavalidation import DataValidation
 
-# Load NLP models
+# Load spaCy model
 nlp = spacy.load("en_core_web_sm")
-model = SentenceTransformer("all-MiniLM-L6-v2", device='cpu')
 
-st.set_page_config(page_title="CV Screening Assistant", layout="centered")
-st.title("🧠 Automated Hiring Assistant")
+# Force CPU & float32 usage to avoid NotImplementedError
+model = SentenceTransformer("all-MiniLM-L6-v2")
+model = model.float()
+model.to(torch.device("cpu"))
 
-# ----------------------------
-# Utility Functions
-# ----------------------------
+st.set_page_config(page_title="Automated Resume Tracker", layout="wide")
+st.title("📄 Automated Resume Analyzer & Tracker")
 
-def extract_text_from_pdf(file):
-    with pdfplumber.open(file) as pdf:
-        return "\n".join(page.extract_text() or "" for page in pdf.pages)
-
-def extract_text_from_docx(file):
-    doc = Document(file)
-    return "\n".join([p.text for p in doc.paragraphs])
-
+# Extract text from uploaded file
 def extract_text(file):
     if file.name.endswith(".pdf"):
-        return extract_text_from_pdf(file)
+        with pdfplumber.open(file) as pdf:
+            return "\n".join(page.extract_text() for page in pdf.pages if page.extract_text())
     elif file.name.endswith(".docx"):
-        return extract_text_from_docx(file)
-    else:
-        return file.read().decode("utf-8")
-
-def extract_email(text):
-    match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
-    return match.group(0) if match else ""
-
-def extract_phone(text):
-    match = re.search(r'(\+?\d{1,3}[-.\s]?)?(\d{10}|\d{3}[-.\s]?\d{3}[-.\s]?\d{4})', text)
-    return match.group(0) if match else ""
-
-def remove_company_name(text, company):
-    return text.replace(company, "[REDACTED]")
-
-def get_similarity(text, jd_embedding):
-    cv_embedding = model.encode(text, convert_to_tensor=True)
-    return round(util.cos_sim(cv_embedding, jd_embedding).item() * 100, 2)
-
-def extract_field(label, text):
-    pattern = rf"{label}[:\-\s]*([^\n\r]+)"
-    try:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match and match.lastindex and match.lastindex >= 1:
-            return match.group(1).strip()
-    except Exception as e:
-        print(f"Error extracting {label}: {e}")
+        doc = Document(file)
+        return "\n".join([para.text for para in doc.paragraphs])
     return ""
 
-def generate_email(name, email, jd_filename):
-    body = f"""\nSubject: Job Opportunity
+# Extract name
+def extract_name(text):
+    doc = nlp(text)
+    for ent in doc.ents:
+        if ent.label_ == "PERSON":
+            return ent.text
+    return ""
 
-Dear {name or 'Candidate'},
+# Extract email
+def extract_email(text):
+    match = re.search(r"\b[\w.-]+@[\w.-]+\.\w{2,4}\b", text)
+    return match.group(0) if match else ""
 
-We are pleased to inform you that your profile has been shortlisted based on your resume. Please find the job description attached.
+# Extract phone
+def extract_phone(text):
+    match = re.search(r"\b(?:\+91[-\s]?)?[6-9]\d{9}\b", text)
+    return match.group(0) if match else ""
 
-Best regards,
-Recruitment Team
-"""
-    filename = f"{name or email}_email.txt"
-    with open(filename, "w") as f:
-        f.write(f"To: {email}\n\n{body}")
-    return filename
+# Extract current company or position
+def extract_field(field_name, text):
+    pattern = rf"{field_name}[:\s]*([^\n,;|]+)"
+    match = re.search(pattern, text, re.IGNORECASE)
+    return match.group(1).strip() if match and match.lastindex >= 1 else ""
 
-# ----------------------------
-# UI Inputs
-# ----------------------------
+# Extract role from JD using similarity
+def extract_role_from_jd(jd_text):
+    role_keywords = ["Software Engineer", "Data Scientist", "Frontend Developer", "Backend Developer", "Marketing Manager"]
+    jd_embedding = model.encode(jd_text, convert_to_tensor=True)
+    scores = [util.cos_sim(jd_embedding, model.encode(role, convert_to_tensor=True)) for role in role_keywords]
+    best_match_index = scores.index(max(scores))
+    return role_keywords[best_match_index]
 
-client_name = st.text_input("🏢 Enter Client Name (Confidential)")
+# Convert DataFrame to downloadable Excel
+def get_excel_download_link(df):
+    output = BytesIO()
+    df.to_excel(output, index=False, engine='openpyxl')
+    output.seek(0)
+    return output
 
-uploaded_jd = st.file_uploader("📌 Upload Job Description (TXT, PDF, DOCX)", type=["txt", "pdf", "docx"])
-uploaded_resumes = st.file_uploader("📁 Upload Candidate Resumes", type=["pdf", "docx", "txt"], accept_multiple_files=True)
+# Convert file to base64 download link
+def get_download_link(file, filename):
+    b64 = base64.b64encode(file.read()).decode()
+    href = f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}">📎 Download Resume</a>'
+    return href
 
-# ----------------------------
-# Process Button
-# ----------------------------
+# App form UI
+uploaded_files = st.file_uploader("📁 Upload Resumes (PDF or DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
+jd_text = st.text_area("📋 Paste Job Description Here", height=150)
 
-if st.button("🚀 Process All Resumes") and uploaded_jd and uploaded_resumes:
-    jd_text = extract_text(uploaded_jd)
-    redacted_jd = remove_company_name(jd_text, client_name)
-    jd_embedding = model.encode(redacted_jd, convert_to_tensor=True)
+if uploaded_files and jd_text:
+    role_from_jd = extract_role_from_jd(jd_text)
+    st.success(f"🧠 Inferred Role from JD: **{role_from_jd}**")
+    st.subheader("📌 Extracted Resume Info")
 
-    data = []
+    results = []
 
-    for file in uploaded_resumes:
+    for file in uploaded_files:
         text = extract_text(file)
+        name = extract_name(text)
         email = extract_email(text)
         phone = extract_phone(text)
-        name = extract_field("Name", text)
         role = extract_field("Role|Position", text)
-        ctc = extract_field("CTC", text)
-        ectc = extract_field("Expected CTC", text)
-        experience = extract_field("Experience", text)
-        notice = extract_field("Notice", text)
-        company = extract_field("Company|Working at", text)
+        company = extract_field("Company|Currently working", text)
 
-        score = get_similarity(text, jd_embedding)
-
-        # Generate draft email
-        generate_email(name, email, uploaded_jd.name)
-
-        # Save resume temporarily for download
-        resume_path = f"resume_{name or email}.txt"
-        with open(resume_path, "w", encoding="utf-8") as f:
-            f.write(text)
-
-        data.append({
-            "Client": client_name,
-            "Name": name,
+        results.append({
+            "Candidate Name": name,
             "Email": email,
             "Phone": phone,
-            "Role": role,
-            "CTC": ctc,
-            "ECTC": ectc,
-            "Experience": experience,
-            "Notice Period": notice,
-            "Currently At": company,
-            "Match %": score,
-            "Status": "Profile Shared",
-            "Resume File": resume_path
+            "Current Company": company,
+            "Role (in Resume)": role,
+            "Role (from JD)": role_from_jd,
+            "Filename": file.name
         })
 
-    df = pd.DataFrame(data)
+        with st.expander(f"👤 {name or file.name}"):
+            st.markdown(f"**Email:** {email or 'N/A'}")
+            st.markdown(f"**Phone:** {phone or 'N/A'}")
+            st.markdown(f"**Current Company:** {company or 'N/A'}")
+            st.markdown(f"**Role Mentioned:** {role or 'N/A'}")
+            st.markdown(get_download_link(file, file.name), unsafe_allow_html=True)
 
-    # Preview Table
-    st.subheader("📊 Candidate Matching Preview")
-    st.dataframe(df.drop(columns=["Resume File"]))
+    df = pd.DataFrame(results)
 
-    # ----------------------------
-    # Excel + Resume Downloads
-    # ----------------------------
+    # Button to generate and download tracker Excel
+    if st.button("💾 Generate Excel and Enable Resume Downloads"):
+        st.success("✅ Excel tracker generated below")
+        excel_data = get_excel_download_link(df)
+        st.download_button("📊 Download Tracker Excel", data=excel_data, file_name="resume_tracker.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    st.subheader("📥 Download Tracker")
-
-    # Save Excel file
-    excel_filename = "Candidate_Tracker.xlsx"
-    df.drop(columns=["Resume File"]).to_excel(excel_filename, index=False)
-
-    wb = load_workbook(excel_filename)
-    ws = wb.active
-
-    # Add dropdown to "Status" column
-    status_list = ["Profile Shared", "Shortlisted", "Interview L1", "Interview L2", "Offered", "Rejected"]
-    dv = DataValidation(type="list", formula1=f'"{",".join(status_list)}"', allow_blank=True)
-    ws.add_data_validation(dv)
-    for row in range(2, len(df) + 2):
-        dv.add(ws[f"M{row}"])  # Status column = M
-    wb.save(excel_filename)
-
-    # Excel download button
-    with open(excel_filename, "rb") as f:
-        st.download_button(
-            label="💾 Download All Candidates Tracker (Excel)",
-            data=f,
-            file_name=excel_filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-    # Resume download buttons
-    st.subheader("📂 Download Individual Resumes")
-    for record in data:
-        with open(record["Resume File"], "rb") as resume_file:
-            st.download_button(
-                label=f"📄 Download Resume: {record['Name'] or record['Email']}",
-                data=resume_file,
-                file_name=record["Resume File"],
-                mime="text/plain"
-            )
+else:
+    st.info("👆 Upload resumes and paste a job description to begin.")
