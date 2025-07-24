@@ -15,7 +15,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 # Load NLP models
 nlp = spacy.load("en_core_web_sm")
-model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer("all-MiniLM-L6-v2", device='cpu')
 
 st.set_page_config(page_title="CV Screening Assistant", layout="centered")
 st.title("🧠 Automated Hiring Assistant")
