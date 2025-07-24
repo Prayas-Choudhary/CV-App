@@ -1,131 +1,168 @@
-import streamlit as st
-import spacy
-import pdfplumber
-import docx
+
+import os
 import re
+import streamlit as st
 import pandas as pd
-import datetime
-from io import BytesIO
+import pdfplumber
+from docx import Document
+import spacy
 from sentence_transformers import SentenceTransformer, util
+from openpyxl import load_workbook
+from openpyxl.worksheet.datavalidation import DataValidation
 
-# Load spaCy model
-try:
-    nlp = spacy.load("en_core_web_sm")
-except:
-    from spacy.cli import download
-    download("en_core_web_sm")
-    nlp = spacy.load("en_core_web_sm")
-
-# Load sentence transformer model
+# Load NLP models
+nlp = spacy.load("en_core_web_sm")
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Extract text
+st.set_page_config(page_title="CV Screening Assistant", layout="centered")
+st.title("🧠 Automated Hiring Assistant")
+
+# ----------------------------
+# Utility Functions
+# ----------------------------
+
 def extract_text_from_pdf(file):
     with pdfplumber.open(file) as pdf:
-        return "\n".join(page.extract_text() or '' for page in pdf.pages)
+        return "\n".join(page.extract_text() or "" for page in pdf.pages)
 
 def extract_text_from_docx(file):
-    doc = docx.Document(file)
-    return "\n".join(p.text for p in doc.paragraphs)
+    doc = Document(file)
+    return "\n".join([p.text for p in doc.paragraphs])
 
-def extract_contact_info(text):
-    phones = re.findall(r"\b(?:\+91[\-\s]?)?[6-9]\d{9}\b", text)
-    emails = re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text)
-    return ", ".join(set(phones)), ", ".join(set(emails))
+def extract_text(file):
+    if file.name.endswith(".pdf"):
+        return extract_text_from_pdf(file)
+    elif file.name.endswith(".docx"):
+        return extract_text_from_docx(file)
+    else:
+        return file.read().decode("utf-8")
 
-def score_resume(resume_text, jd_text):
-    emb_resume = model.encode(resume_text, convert_to_tensor=True)
-    emb_jd = model.encode(jd_text, convert_to_tensor=True)
-    return round(util.cos_sim(emb_resume, emb_jd).item() * 100, 2)
+def extract_email(text):
+    match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+    return match.group(0) if match else ""
 
-def clean_text(text):
-    return re.sub(r"\s+", " ", text.strip())
+def extract_phone(text):
+    match = re.search(r'(\+?\d{1,3}[-.\s]?)?(\d{10}|\d{3}[-.\s]?\d{3}[-.\s]?\d{4})', text)
+    return match.group(0) if match else ""
 
-def convert_df_to_excel(df):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Results")
-    return output.getvalue()
+def remove_company_name(text, company):
+    return text.replace(company, "[REDACTED]")
 
-# Streamlit UI
-st.set_page_config(page_title="Smart Resume Analyzer", layout="wide")
-st.title("📄 Smart Resume Analyzer")
-st.markdown("Upload resumes and analyze them against a job description.")
+def get_similarity(text, jd_embedding):
+    cv_embedding = model.encode(text, convert_to_tensor=True)
+    return round(util.cos_sim(cv_embedding, jd_embedding).item() * 100, 2)
 
-with st.sidebar:
-    st.header("💼 Job Description")
-    jd_text = st.text_area("Paste JD here", height=250)
-    save_jd = st.checkbox("Save this JD to history")
-    analyze = st.button("Start Analysis")
+def extract_field(field_name, text):
+    pattern = rf"{field_name}[:\s]*([^\n\r]+)"
+    match = re.search(pattern, text, re.IGNORECASE)
+    return match.group(1).strip() if match else ""
 
-uploaded_files = st.file_uploader("Upload Resumes (PDF or DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
+def generate_email(name, email, jd_filename):
+    body = f"""\
+Subject: Job Opportunity
 
-if analyze and jd_text and uploaded_files:
-    results = []
+Dear {name or 'Candidate'},
 
-    for file in uploaded_files:
-        name = file.name
-        try:
-            ext = name.split(".")[-1].lower()
-            if ext == "pdf":
-                text = extract_text_from_pdf(file)
-            elif ext == "docx":
-                text = extract_text_from_docx(file)
-            else:
-                st.error(f"Unsupported file: {name}")
-                continue
+We are pleased to inform you that your profile has been shortlisted based on your resume. Please find the job description attached.
 
-            text = clean_text(text)
-            phone, email = extract_contact_info(text)
-            score = score_resume(text, jd_text)
+Best regards,
+Recruitment Team
+"""
+    filename = f"{name or email}_email.txt"
+    with open(filename, "w") as f:
+        f.write(f"To: {email}\n\n{body}")
+    return filename
 
-            email_draft = (
-                f"Dear Candidate,\n\n"
-                f"Thank you for applying. Based on our analysis, your resume matches {score}% of our job requirements.\n"
-                f"We will contact you shortly.\n\nBest,\nHR Team"
-            )
+# ----------------------------
+# UI Inputs
+# ----------------------------
 
-            results.append({
-                "File Name": name,
-                "Score (%)": score,
-                "Phone": phone,
-                "Email": email,
-                "Email Draft": email_draft,
-                "Preview": text[:500] + "..." if len(text) > 500 else text
-            })
+client_name = st.text_input("🏢 Enter Client Name (Confidential)")
 
-        except Exception as e:
-            st.error(f"Error processing {name}: {str(e)}")
+uploaded_jd = st.file_uploader("📌 Upload Job Description (TXT, PDF, DOCX)", type=["txt", "pdf", "docx"])
+uploaded_resumes = st.file_uploader("📁 Upload Candidate Resumes", type=["pdf", "docx", "txt"], accept_multiple_files=True)
 
-    if results:
-        df = pd.DataFrame(results)
+# ----------------------------
+# Process Button
+# ----------------------------
 
-        st.success(f"✅ Processed {len(results)} resumes successfully.")
-        st.subheader("📊 Summary Table")
-        st.dataframe(df[["File Name", "Score (%)", "Phone", "Email"]].sort_values("Score (%)", ascending=False))
+if st.button("🚀 Process All Resumes") and uploaded_jd and uploaded_resumes:
+    jd_text = extract_text(uploaded_jd)
+    redacted_jd = remove_company_name(jd_text, client_name)
+    jd_embedding = model.encode(redacted_jd, convert_to_tensor=True)
 
-        st.subheader("📬 Email Drafts")
-        for row in results:
-            with st.expander(f"✉️ {row['File Name']} - {row['Score (%)']}%"):
-                st.code(row["Email Draft"], language="text")
+    data = []
 
-        st.subheader("📝 Resume Previews")
-        for row in results:
-            with st.expander(f"📄 {row['File Name']} Preview"):
-                st.write(row["Preview"])
+    for file in uploaded_resumes:
+        text = extract_text(file)
+        email = extract_email(text)
+        phone = extract_phone(text)
+        name = extract_field("Name", text)
+        role = extract_field("Role|Position", text)
+        ctc = extract_field("CTC", text)
+        ectc = extract_field("Expected CTC", text)
+        experience = extract_field("Experience", text)
+        notice = extract_field("Notice", text)
+        company = extract_field("Company|Working at", text)
 
-        st.download_button(
-            label="📥 Download Excel Report",
-            data=convert_df_to_excel(df),
-            file_name=f"resume_report_{datetime.datetime.now().strftime('%Y%m%d%H%M')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        score = get_similarity(text, jd_embedding)
 
-    if save_jd:
-        with open("jd_history.txt", "a", encoding="utf-8") as f:
-            f.write(f"\n---\n{datetime.datetime.now()}\n{jd_text.strip()}\n")
-        st.info("✅ JD saved to history.")
+        # Generate draft email
+        generate_email(name, email, uploaded_jd.name)
 
-elif analyze:
-    st.warning("⚠️ Please upload resumes and enter a JD to start analysis.")
+        # Save resume temporarily for download
+        resume_path = f"resume_{name or email}.txt"
+        with open(resume_path, "w", encoding="utf-8") as f:
+            f.write(text)
 
+        data.append({
+            "Client": client_name,
+            "Name": name,
+            "Email": email,
+            "Phone": phone,
+            "Role": role,
+            "CTC": ctc,
+            "ECTC": ectc,
+            "Experience": experience,
+            "Notice Period": notice,
+            "Currently At": company,
+            "Match %": score,
+            "Status": "Profile Shared",
+            "Resume File": resume_path
+        })
+
+    df = pd.DataFrame(data)
+
+    # Preview before download
+    st.subheader("📊 Candidate Matching Preview")
+    st.dataframe(df.drop(columns=["Resume File"]))
+
+    if st.button("💾 Generate Excel and Enable Resume Downloads"):
+        filename = "Candidate_Tracker.xlsx"
+        df.drop(columns=["Resume File"]).to_excel(filename, index=False)
+
+        wb = load_workbook(filename)
+        ws = wb.active
+
+        # Add status dropdown
+        status_list = ["Profile Shared", "Shortlisted", "Interview L1", "Interview L2", "Offered", "Rejected"]
+        dv = DataValidation(type="list", formula1=f'"{",".join(status_list)}"', allow_blank=True)
+        ws.add_data_validation(dv)
+        for row in range(2, len(df) + 2):
+            dv.add(ws[f"M{row}"])  # Status column = M
+
+        wb.save(filename)
+
+        st.success("✅ Excel file generated successfully!")
+
+        with open(filename, "rb") as f:
+            st.download_button("⬇️ Download Candidate Tracker Excel", f, file_name=filename)
+
+        st.subheader("📂 Download Individual Resumes (as .txt):")
+        for record in data:
+            with open(record["Resume File"], "rb") as resume_file:
+                st.download_button(
+                    label=f"Download {record['Name'] or record['Email']}",
+                    data=resume_file,
+                    file_name=record["Resume File"]
+                )
