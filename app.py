@@ -154,31 +154,30 @@ if st.button("🚀 Process All Resumes") and uploaded_jd and uploaded_resumes:
     st.subheader("📊 Candidate Matching Preview")
     st.dataframe(df.drop(columns=["Resume File"]))
 
-    if st.button("💾 Generate Excel and Enable Resume Downloads"):
-        filename = "Candidate_Tracker.xlsx"
-        df.drop(columns=["Resume File"]).to_excel(filename, index=False)
+ if st.button("💾 Generate Excel and Enable Resume Downloads"):
+    filename = "Candidate_Tracker.xlsx"
+    temp_df = df.drop(columns=["Resume File"])
+    temp_df.to_excel(filename, index=False)
 
-        wb = load_workbook(filename)
-        ws = wb.active
+    wb = load_workbook(filename)
+    ws = wb.active
 
-        status_list = ["Profile Shared", "Shortlisted", "Interview L1", "Interview L2", "Offered", "Rejected"]
-        dv = DataValidation(type="list", formula1=f'"{",".join(status_list)}"', allow_blank=True)
-        ws.add_data_validation(dv)
-        for row in range(2, len(df) + 2):
-            dv.add(ws[f"M{row}"])
+    status_list = ["Profile Shared", "Shortlisted", "Interview L1", "Interview L2", "Offered", "Rejected"]
+    dv = DataValidation(type="list", formula1=f'"{",".join(status_list)}"', allow_blank=True)
+    ws.add_data_validation(dv)
 
-        wb.save(filename)
+    for row in range(2, len(temp_df) + 2):
+        dv.add(ws[f"M{row}"])  # Assuming "Status" is column M
 
-        st.success("✅ Excel file generated successfully!")
+    wb.save(filename)
 
-        with open(filename, "rb") as f:
-            st.download_button("⬇️ Download Candidate Tracker Excel", f, file_name=filename)
+    with open(filename, "rb") as f:
+        excel_bytes = f.read()
+        st.download_button(
+            label="⬇️ Download Candidate Tracker Excel",
+            data=excel_bytes,
+            file_name=filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-        st.subheader("📂 Download Individual Resumes (as .txt):")
-        for record in data:
-            with open(record["Resume File"], "rb") as resume_file:
-                st.download_button(
-                    label=f"Download {record['Name'] or record['Email']}",
-                    data=resume_file,
-                    file_name=record["Resume File"]
                 )
