@@ -54,8 +54,14 @@ def get_similarity(text, jd_embedding):
 
 def extract_field(label, text):
     pattern = rf"{label}[:\-\s]*([^\n\r]+)"
-    match = re.search(pattern, text, re.IGNORECASE)
-    return match.group(1).strip() if match and match.lastindex >= 1 else ""
+    try:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match and match.lastindex >= 1:
+            return match.group(1).strip()
+    except Exception as e:
+        print(f"Error extracting {label}: {e}")
+    return ""
+    
 def generate_email(name, email, jd_filename):
     body = f"""\
 Subject: Job Opportunity
