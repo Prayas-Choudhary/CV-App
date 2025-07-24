@@ -21,6 +21,29 @@ st.title("🧠 Automated Hiring Assistant")
 # Utility Functions
 # ----------------------------
 
+name = extract_name(text)
+role = extract_role(text)
+company = extract_company(text)
+
+def extract_name(text):
+    """
+    Attempts to extract a name using common patterns or the top of the resume.
+    """
+    # Look for 'Name:' pattern
+    match = re.search(r"(?:Name)\s*[:\-–—]\s*([A-Z][a-z]+\s+[A-Z][a-z]+)", text)
+    if match:
+        return match.group(1).strip()
+
+    # Try using spacy for the first PERSON entity in top 10 lines
+    lines = text.splitlines()
+    for line in lines[:10]:
+        doc = nlp(line)
+        for ent in doc.ents:
+            if ent.label_ == "PERSON":
+                return ent.text.strip()
+
+    return ""
+
 def extract_text_from_pdf(file):
     with pdfplumber.open(file) as pdf:
         return "\n".join(page.extract_text() or "" for page in pdf.pages)
@@ -52,15 +75,24 @@ def get_similarity(text, jd_embedding):
     cv_embedding = model.encode(text, convert_to_tensor=True)
     return round(util.cos_sim(cv_embedding, jd_embedding).item() * 100, 2)
 
-def extract_field(label, text):
-    pattern = rf"{label}[:\-\s]*([^\n\r]+)"
+def extract_field(label_pattern, text):
+    """
+    Extracts field based on possible label variations using regex.
+    Accepts label patterns separated by | (e.g., Role|Position).
+    """
+    pattern = rf"(?i)(?:{label_pattern})\s*[:\-–—]\s*(.*)"
     try:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match and match.lastindex >= 1:
-            return match.group(1).strip()
+        match = re.search(pattern, text)
+        return match.group(1).strip() if match else ""
     except Exception as e:
-        print(f"Error extracting {label}: {e}")
-    return ""
+        print(f"Error extracting field '{label_pattern}': {e}")
+        return ""
+def extract_role(text):
+    return extract_field("Role|Position|Job Title|Designation", text)
+
+def extract_company(text):
+    return extract_field("Company|Currently Working at|Employer|Organisation|Working with|Currently At", text)
+
     
 def generate_email(name, email, jd_filename):
     body = f"""\
