@@ -1,4 +1,3 @@
-
 import os
 import re
 import streamlit as st
@@ -20,29 +19,6 @@ st.title("🧠 Automated Hiring Assistant")
 # ----------------------------
 # Utility Functions
 # ----------------------------
-
-name = extract_name(text)
-role = extract_role(text)
-company = extract_company(text)
-
-def extract_name(text):
-    """
-    Attempts to extract a name using common patterns or the top of the resume.
-    """
-    # Look for 'Name:' pattern
-    match = re.search(r"(?:Name)\s*[:\-–—]\s*([A-Z][a-z]+\s+[A-Z][a-z]+)", text)
-    if match:
-        return match.group(1).strip()
-
-    # Try using spacy for the first PERSON entity in top 10 lines
-    lines = text.splitlines()
-    for line in lines[:10]:
-        doc = nlp(line)
-        for ent in doc.ents:
-            if ent.label_ == "PERSON":
-                return ent.text.strip()
-
-    return ""
 
 def extract_text_from_pdf(file):
     with pdfplumber.open(file) as pdf:
@@ -76,10 +52,6 @@ def get_similarity(text, jd_embedding):
     return round(util.cos_sim(cv_embedding, jd_embedding).item() * 100, 2)
 
 def extract_field(label_pattern, text):
-    """
-    Extracts field based on possible label variations using regex.
-    Accepts label patterns separated by | (e.g., Role|Position).
-    """
     pattern = rf"(?i)(?:{label_pattern})\s*[:\-–—]\s*(.*)"
     try:
         match = re.search(pattern, text)
@@ -87,16 +59,27 @@ def extract_field(label_pattern, text):
     except Exception as e:
         print(f"Error extracting field '{label_pattern}': {e}")
         return ""
+
+def extract_name(text):
+    match = re.search(r"(?:Name)\s*[:\-–—]\s*([A-Z][a-z]+\s+[A-Z][a-z]+)", text)
+    if match:
+        return match.group(1).strip()
+    lines = text.splitlines()
+    for line in lines[:10]:
+        doc = nlp(line)
+        for ent in doc.ents:
+            if ent.label_ == "PERSON":
+                return ent.text.strip()
+    return ""
+
 def extract_role(text):
     return extract_field("Role|Position|Job Title|Designation", text)
 
 def extract_company(text):
     return extract_field("Company|Currently Working at|Employer|Organisation|Working with|Currently At", text)
 
-    
 def generate_email(name, email, jd_filename):
-    body = f"""\
-Subject: Job Opportunity
+    body = f"""\nSubject: Job Opportunity
 
 Dear {name or 'Candidate'},
 
@@ -134,20 +117,18 @@ if st.button("🚀 Process All Resumes") and uploaded_jd and uploaded_resumes:
         text = extract_text(file)
         email = extract_email(text)
         phone = extract_phone(text)
-        name = extract_field("Name", text)
-        role = extract_field("Role|Position", text)
-        ctc = extract_field("CTC", text)
-        ectc = extract_field("Expected CTC", text)
-        experience = extract_field("Experience", text)
-        notice = extract_field("Notice", text)
-        company = extract_field("Company|Working at", text)
+        name = extract_name(text)
+        role = extract_role(text)
+        ctc = extract_field("CTC|Current CTC", text)
+        ectc = extract_field("Expected CTC|ECTC", text)
+        experience = extract_field("Experience|Total Experience", text)
+        notice = extract_field("Notice|Notice Period", text)
+        company = extract_company(text)
 
         score = get_similarity(text, jd_embedding)
 
-        # Generate draft email
         generate_email(name, email, uploaded_jd.name)
 
-        # Save resume temporarily for download
         resume_path = f"resume_{name or email}.txt"
         with open(resume_path, "w", encoding="utf-8") as f:
             f.write(text)
@@ -170,7 +151,6 @@ if st.button("🚀 Process All Resumes") and uploaded_jd and uploaded_resumes:
 
     df = pd.DataFrame(data)
 
-    # Preview before download
     st.subheader("📊 Candidate Matching Preview")
     st.dataframe(df.drop(columns=["Resume File"]))
 
@@ -181,12 +161,11 @@ if st.button("🚀 Process All Resumes") and uploaded_jd and uploaded_resumes:
         wb = load_workbook(filename)
         ws = wb.active
 
-        # Add status dropdown
         status_list = ["Profile Shared", "Shortlisted", "Interview L1", "Interview L2", "Offered", "Rejected"]
         dv = DataValidation(type="list", formula1=f'"{",".join(status_list)}"', allow_blank=True)
         ws.add_data_validation(dv)
         for row in range(2, len(df) + 2):
-            dv.add(ws[f"M{row}"])  # Status column = M
+            dv.add(ws[f"M{row}"])
 
         wb.save(filename)
 
