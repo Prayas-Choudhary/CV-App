@@ -52,11 +52,10 @@ def get_similarity(text, jd_embedding):
     cv_embedding = model.encode(text, convert_to_tensor=True)
     return round(util.cos_sim(cv_embedding, jd_embedding).item() * 100, 2)
 
-def extract_field(field_name, text):
-    pattern = rf"{field_name}[:\s]*([^\n\r]+)"
+def extract_field(label, text):
+    pattern = rf"{label}[:\-\s]*([^\n\r]+)"
     match = re.search(pattern, text, re.IGNORECASE)
-    return match.group(1).strip() if match else ""
-
+    return match.group(1).strip() if match and match.lastindex >= 1 else ""
 def generate_email(name, email, jd_filename):
     body = f"""\
 Subject: Job Opportunity
