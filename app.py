@@ -11,7 +11,6 @@ from openpyxl import load_workbook
 from openpyxl.worksheet.datavalidation import DataValidation
 
 # Load NLP models
-try:
 nlp = spacy.load("en_core_web_sm")
 except OSError:
     subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"])
