@@ -51,32 +51,15 @@ def get_similarity(text, jd_embedding):
     cv_embedding = model.encode(text, convert_to_tensor=True)
     return round(util.cos_sim(cv_embedding, jd_embedding).item() * 100, 2)
 
-def extract_field(label_pattern, text):
-    pattern = rf"(?i)(?:{label_pattern})\s*[:\-–—]\s*(.*)"
+def extract_field(label, text):
+    pattern = rf"{label}[:\-\s]*([^\n\r]+)"
     try:
-        match = re.search(pattern, text)
-        return match.group(1).strip() if match else ""
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match and match.lastindex and match.lastindex >= 1:
+            return match.group(1).strip()
     except Exception as e:
-        print(f"Error extracting field '{label_pattern}': {e}")
-        return ""
-
-def extract_name(text):
-    match = re.search(r"(?:Name)\s*[:\-–—]\s*([A-Z][a-z]+\s+[A-Z][a-z]+)", text)
-    if match:
-        return match.group(1).strip()
-    lines = text.splitlines()
-    for line in lines[:10]:
-        doc = nlp(line)
-        for ent in doc.ents:
-            if ent.label_ == "PERSON":
-                return ent.text.strip()
+        print(f"Error extracting {label}: {e}")
     return ""
-
-def extract_role(text):
-    return extract_field("Role|Position|Job Title|Designation", text)
-
-def extract_company(text):
-    return extract_field("Company|Currently Working at|Employer|Organisation|Working with|Currently At", text)
 
 def generate_email(name, email, jd_filename):
     body = f"""\nSubject: Job Opportunity
@@ -117,18 +100,20 @@ if st.button("🚀 Process All Resumes") and uploaded_jd and uploaded_resumes:
         text = extract_text(file)
         email = extract_email(text)
         phone = extract_phone(text)
-        name = extract_name(text)
-        role = extract_role(text)
-        ctc = extract_field("CTC|Current CTC", text)
-        ectc = extract_field("Expected CTC|ECTC", text)
-        experience = extract_field("Experience|Total Experience", text)
-        notice = extract_field("Notice|Notice Period", text)
-        company = extract_company(text)
+        name = extract_field("Name", text)
+        role = extract_field("Role|Position", text)
+        ctc = extract_field("CTC", text)
+        ectc = extract_field("Expected CTC", text)
+        experience = extract_field("Experience", text)
+        notice = extract_field("Notice", text)
+        company = extract_field("Company|Working at", text)
 
         score = get_similarity(text, jd_embedding)
 
+        # Generate draft email
         generate_email(name, email, uploaded_jd.name)
 
+        # Save resume temporarily for download
         resume_path = f"resume_{name or email}.txt"
         with open(resume_path, "w", encoding="utf-8") as f:
             f.write(text)
@@ -151,33 +136,47 @@ if st.button("🚀 Process All Resumes") and uploaded_jd and uploaded_resumes:
 
     df = pd.DataFrame(data)
 
+    # Preview Table
     st.subheader("📊 Candidate Matching Preview")
     st.dataframe(df.drop(columns=["Resume File"]))
 
- if st.button("💾 Generate Excel and Enable Resume Downloads"):
-    filename = "Candidate_Tracker.xlsx"
-    temp_df = df.drop(columns=["Resume File"])
-    temp_df.to_excel(filename, index=False)
+    # ----------------------------
+    # Excel + Resume Downloads
+    # ----------------------------
 
-    wb = load_workbook(filename)
+    st.subheader("📥 Download Tracker")
+
+    # Save Excel file
+    excel_filename = "Candidate_Tracker.xlsx"
+    df.drop(columns=["Resume File"]).to_excel(excel_filename, index=False)
+
+    wb = load_workbook(excel_filename)
     ws = wb.active
 
+    # Add dropdown to "Status" column
     status_list = ["Profile Shared", "Shortlisted", "Interview L1", "Interview L2", "Offered", "Rejected"]
     dv = DataValidation(type="list", formula1=f'"{",".join(status_list)}"', allow_blank=True)
     ws.add_data_validation(dv)
+    for row in range(2, len(df) + 2):
+        dv.add(ws[f"M{row}"])  # Status column = M
+    wb.save(excel_filename)
 
-    for row in range(2, len(temp_df) + 2):
-        dv.add(ws[f"M{row}"])  # Assuming "Status" is column M
-
-    wb.save(filename)
-
-    with open(filename, "rb") as f:
-        excel_bytes = f.read()
+    # Excel download button
+    with open(excel_filename, "rb") as f:
         st.download_button(
-            label="⬇️ Download Candidate Tracker Excel",
-            data=excel_bytes,
-            file_name=filename,
+            label="💾 Download All Candidates Tracker (Excel)",
+            data=f,
+            file_name=excel_filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-                )
+    # Resume download buttons
+    st.subheader("📂 Download Individual Resumes")
+    for record in data:
+        with open(record["Resume File"], "rb") as resume_file:
+            st.download_button(
+                label=f"📄 Download Resume: {record['Name'] or record['Email']}",
+                data=resume_file,
+                file_name=record["Resume File"],
+                mime="text/plain"
+            )
