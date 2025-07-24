@@ -15,15 +15,24 @@ from sentence_transformers import SentenceTransformer, util
 # Load spaCy model
 nlp = spacy.load("en_core_web_sm")
 
-# Force CPU & float32 usage to avoid NotImplementedError
+# Force CPU & float32 usage to avoid torch meta tensor error
 model = SentenceTransformer("all-MiniLM-L6-v2")
 model = model.float()
 model.to(torch.device("cpu"))
 
-st.set_page_config(page_title="Automated Resume Tracker", layout="wide")
+# Streamlit layout
+st.set_page_config(page_title="Automated Resume Analyzer", layout="wide")
 st.title("📄 Automated Resume Analyzer & Tracker")
 
-# Extract text from uploaded file
+# Job Description input (Always visible)
+st.subheader("📋 Job Description")
+jd_text = st.text_area("Paste Job Description Here:", height=150, placeholder="E.g. Looking for a Software Engineer with 3+ years of experience in Python and ML...")
+
+# Resume upload (Always visible)
+st.subheader("📁 Upload Candidate Resumes")
+uploaded_files = st.file_uploader("Upload PDFs or DOCX resumes:", type=["pdf", "docx"], accept_multiple_files=True)
+
+# --- Utility Functions ---
 def extract_text(file):
     if file.name.endswith(".pdf"):
         with pdfplumber.open(file) as pdf:
@@ -33,7 +42,6 @@ def extract_text(file):
         return "\n".join([para.text for para in doc.paragraphs])
     return ""
 
-# Extract name
 def extract_name(text):
     doc = nlp(text)
     for ent in doc.ents:
@@ -41,23 +49,19 @@ def extract_name(text):
             return ent.text
     return ""
 
-# Extract email
 def extract_email(text):
     match = re.search(r"\b[\w.-]+@[\w.-]+\.\w{2,4}\b", text)
     return match.group(0) if match else ""
 
-# Extract phone
 def extract_phone(text):
     match = re.search(r"\b(?:\+91[-\s]?)?[6-9]\d{9}\b", text)
     return match.group(0) if match else ""
 
-# Extract current company or position
 def extract_field(field_name, text):
     pattern = rf"{field_name}[:\s]*([^\n,;|]+)"
     match = re.search(pattern, text, re.IGNORECASE)
     return match.group(1).strip() if match and match.lastindex >= 1 else ""
 
-# Extract role from JD using similarity
 def extract_role_from_jd(jd_text):
     role_keywords = ["Software Engineer", "Data Scientist", "Frontend Developer", "Backend Developer", "Marketing Manager"]
     jd_embedding = model.encode(jd_text, convert_to_tensor=True)
@@ -65,27 +69,22 @@ def extract_role_from_jd(jd_text):
     best_match_index = scores.index(max(scores))
     return role_keywords[best_match_index]
 
-# Convert DataFrame to downloadable Excel
 def get_excel_download_link(df):
     output = BytesIO()
     df.to_excel(output, index=False, engine='openpyxl')
     output.seek(0)
     return output
 
-# Convert file to base64 download link
 def get_download_link(file, filename):
     b64 = base64.b64encode(file.read()).decode()
     href = f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}">📎 Download Resume</a>'
     return href
 
-# App form UI
-uploaded_files = st.file_uploader("📁 Upload Resumes (PDF or DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
-jd_text = st.text_area("📋 Paste Job Description Here", height=150)
-
-if uploaded_files and jd_text:
+# --- Main Processing ---
+if uploaded_files and jd_text.strip():
     role_from_jd = extract_role_from_jd(jd_text)
     st.success(f"🧠 Inferred Role from JD: **{role_from_jd}**")
-    st.subheader("📌 Extracted Resume Info")
+    st.subheader("📌 Extracted Resume Information")
 
     results = []
 
@@ -116,11 +115,13 @@ if uploaded_files and jd_text:
 
     df = pd.DataFrame(results)
 
-    # Button to generate and download tracker Excel
     if st.button("💾 Generate Excel and Enable Resume Downloads"):
-        st.success("✅ Excel tracker generated below")
+        st.success("✅ Tracker Generated Below")
         excel_data = get_excel_download_link(df)
         st.download_button("📊 Download Tracker Excel", data=excel_data, file_name="resume_tracker.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-else:
-    st.info("👆 Upload resumes and paste a job description to begin.")
+elif not jd_text.strip():
+    st.info("✏️ Please paste a Job Description to get started.")
+
+elif not uploaded_files:
+    st.info("📂 Please upload at least one resume.")
